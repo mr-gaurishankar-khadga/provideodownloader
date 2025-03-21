@@ -586,12 +586,12 @@ def start_cleanup_thread():
 # Start cleanup on app startup
 start_cleanup_thread()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Use a production WSGI server for better performance
     try:
         from waitress import serve
         logger.info("Starting server with Waitress")
-        serve(app, host='0.0.0.0', port=5000, threads=8)
+        serve(app, host="0.0.0.0", port=5000, threads=8)
     except ImportError:
         logger.info("Waitress not available, using Flask development server")
-        app.run(host='0.0.0.0', debug=False, port=5000, threaded=True)
+        app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
