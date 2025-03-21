@@ -11,6 +11,7 @@ import json
 import re
 import subprocess
 import hashlib
+import browser_cookie3
 from datetime import datetime
 import urllib3
 
@@ -36,6 +37,54 @@ CACHE_TTL = 600  # 10 minutes
 # Create download directory if it doesn't exist
 DOWNLOAD_DIR = os.path.join(tempfile.gettempdir(), 'video_downloads')
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# Path to cookies file
+COOKIES_FILE = os.path.join(tempfile.gettempdir(), 'yt_cookies.txt')
+
+def extract_browser_cookies():
+    """Extract cookies from browsers and save them to a file"""
+    try:
+        # Try to get cookies from Chrome
+        cookies = browser_cookie3.chrome(domain_name='.youtube.com')
+        return cookies
+    except:
+        try:
+            # Try Firefox if Chrome fails
+            cookies = browser_cookie3.firefox(domain_name='.youtube.com')
+            return cookies
+        except:
+            try:
+                # Try Edge if both fail
+                cookies = browser_cookie3.edge(domain_name='.youtube.com')
+                return cookies
+            except:
+                logger.warning("Could not extract cookies from any browser")
+                return None
+
+def get_cookies_file():
+    """Get or create a cookies file path"""
+    # Check if the file exists and is recent (less than 24 hours old)
+    if os.path.exists(COOKIES_FILE) and (time.time() - os.path.getmtime(COOKIES_FILE)) < 86400:
+        return COOKIES_FILE
+    
+    # Try to extract cookies from browser
+    cookies = extract_browser_cookies()
+    if not cookies:
+        return None
+    
+    # Save cookies to file in Netscape format
+    with open(COOKIES_FILE, 'w') as f:
+        f.write("# Netscape HTTP Cookie File\n")
+        for cookie in cookies:
+            f.write(f"{cookie.domain}\t")
+            f.write("TRUE\t")
+            f.write(f"{cookie.path}\t")
+            f.write(f"{'TRUE' if cookie.secure else 'FALSE'}\t")
+            f.write(f"{cookie.expires if cookie.expires else 0}\t")
+            f.write(f"{cookie.name}\t")
+            f.write(f"{cookie.value}\n")
+    
+    return COOKIES_FILE
 
 class ProgressHook:
     def __init__(self, task_id):
@@ -137,12 +186,19 @@ def convert_with_ffmpeg_stream(url, output_file, format_id, task_id):
     """Use FFmpeg to download and convert in one step"""
     try:
         # First, get the direct media URL from yt-dlp
-        with yt_dlp.YoutubeDL({
+        ydl_opts = {
             'quiet': True, 
             'format': format_id,
             'socket_timeout': 10,
             'nocheckcertificate': True
-        }) as ydl:
+        }
+        
+        # Add cookies if available
+        cookies_file = get_cookies_file()
+        if cookies_file:
+            ydl_opts['cookiefile'] = cookies_file
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             direct_url = info.get('url')
             
@@ -227,6 +283,11 @@ def get_video_info():
             'nocheckcertificate': True,  # Skip SSL cert verification
         }
         
+        # Add cookies if available (important for YouTube)
+        cookies_file = get_cookies_file()
+        if cookies_file:
+            ydl_opts['cookiefile'] = cookies_file
+        
         # Extract info
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             logger.info(f"Extracting info for: {url}")
@@ -296,7 +357,13 @@ def download_worker(task_id, url, format_id, convert_to_mp3_flag=False):
                 convert_with_ffmpeg_stream(url, mp3_output, format_id, task_id)
                 
                 # Get info for filename
-                with yt_dlp.YoutubeDL({'quiet': True, 'socket_timeout': 5}) as ydl:
+                ydl_opts = {'quiet': True, 'socket_timeout': 5}
+                # Add cookies if available
+                cookies_file = get_cookies_file()
+                if cookies_file:
+                    ydl_opts['cookiefile'] = cookies_file
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
                     filename = clean_filename(info.get('title', 'audio'))
                 
@@ -332,6 +399,11 @@ def download_worker(task_id, url, format_id, convert_to_mp3_flag=False):
             'nocheckcertificate': True,
             'noprogress': True,  # Disable progress bar for speed
         }
+        
+        # Add cookies if available
+        cookies_file = get_cookies_file()
+        if cookies_file:
+            ydl_opts['cookiefile'] = cookies_file
         
         # If we're going to extract audio with yt-dlp directly
         if convert_to_mp3_flag and 'convert_with_ytdlp' in download_tasks[task_id]:
@@ -523,7 +595,7 @@ def health_check():
     """Simple health check endpoint"""
     return jsonify({
         "status": "ok",
-        "version": "2.1.0",
+        "version": "2.2.0",
         "yt_dlp_version": yt_dlp.version.__version__
     })
 
