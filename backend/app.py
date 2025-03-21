@@ -11,7 +11,6 @@ import json
 import re
 import subprocess
 import hashlib
-import browser_cookie3
 from datetime import datetime
 import urllib3
 
@@ -35,56 +34,40 @@ video_info_cache = {}
 CACHE_TTL = 600  # 10 minutes
 
 # Create download directory if it doesn't exist
-DOWNLOAD_DIR = os.path.join(tempfile.gettempdir(), 'video_downloads')
+# For Render, we need to use their persistent storage paths
+if os.environ.get('RENDER'):
+    # Use Render's persistent disk if available
+    PERSISTENT_DIR = os.environ.get('RENDER_PERSISTENT_DIR', '/data')
+    DOWNLOAD_DIR = os.path.join(PERSISTENT_DIR, 'video_downloads')
+    COOKIES_FILE = os.path.join(PERSISTENT_DIR, 'yt_cookies.txt')
+else:
+    # Fallback to temp directory for local development
+    DOWNLOAD_DIR = os.path.join(tempfile.gettempdir(), 'video_downloads')
+    COOKIES_FILE = os.path.join(tempfile.gettempdir(), 'yt_cookies.txt')
+
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Path to cookies file
-COOKIES_FILE = os.path.join(tempfile.gettempdir(), 'yt_cookies.txt')
-
-def extract_browser_cookies():
-    """Extract cookies from browsers and save them to a file"""
-    try:
-        # Try to get cookies from Chrome
-        cookies = browser_cookie3.chrome(domain_name='.youtube.com')
-        return cookies
-    except:
-        try:
-            # Try Firefox if Chrome fails
-            cookies = browser_cookie3.firefox(domain_name='.youtube.com')
-            return cookies
-        except:
-            try:
-                # Try Edge if both fail
-                cookies = browser_cookie3.edge(domain_name='.youtube.com')
-                return cookies
-            except:
-                logger.warning("Could not extract cookies from any browser")
-                return None
-
+# Removed browser_cookie3 dependency as it won't work well in production environments
+# Now providing a way to manually set cookies via environment variable
 def get_cookies_file():
-    """Get or create a cookies file path"""
-    # Check if the file exists and is recent (less than 24 hours old)
+    """Get cookies file path from environment or return None"""
+    # Check if cookies are provided via environment variable
+    env_cookies = os.environ.get('YOUTUBE_COOKIES')
+    if env_cookies:
+        try:
+            # Write cookies from environment variable to file
+            with open(COOKIES_FILE, 'w') as f:
+                f.write("# Netscape HTTP Cookie File\n")
+                f.write(env_cookies)
+            return COOKIES_FILE
+        except Exception as e:
+            logger.error(f"Error writing cookies: {str(e)}")
+    
+    # Check if cookies file already exists
     if os.path.exists(COOKIES_FILE) and (time.time() - os.path.getmtime(COOKIES_FILE)) < 86400:
         return COOKIES_FILE
     
-    # Try to extract cookies from browser
-    cookies = extract_browser_cookies()
-    if not cookies:
-        return None
-    
-    # Save cookies to file in Netscape format
-    with open(COOKIES_FILE, 'w') as f:
-        f.write("# Netscape HTTP Cookie File\n")
-        for cookie in cookies:
-            f.write(f"{cookie.domain}\t")
-            f.write("TRUE\t")
-            f.write(f"{cookie.path}\t")
-            f.write(f"{'TRUE' if cookie.secure else 'FALSE'}\t")
-            f.write(f"{cookie.expires if cookie.expires else 0}\t")
-            f.write(f"{cookie.name}\t")
-            f.write(f"{cookie.value}\n")
-    
-    return COOKIES_FILE
+    return None
 
 class ProgressHook:
     def __init__(self, task_id):
@@ -596,7 +579,9 @@ def health_check():
     return jsonify({
         "status": "ok",
         "version": "2.2.0",
-        "yt_dlp_version": yt_dlp.version.__version__
+        "yt_dlp_version": yt_dlp.version.__version__,
+        "download_dir": DOWNLOAD_DIR,
+        "environment": "production" if os.environ.get('RENDER') else "development"
     })
 
 # Optimized cleanup function to prevent filling up disk space
@@ -648,7 +633,10 @@ def start_cleanup_thread():
     """Start background thread for periodic cleanup"""
     def cleanup_worker():
         while True:
-            cleanup_old_files()
+            try:
+                cleanup_old_files()
+            except Exception as e:
+                logger.error(f"Error in cleanup: {str(e)}")
             time.sleep(1800)  # Run every 30 minutes
     
     thread = threading.Thread(target=cleanup_worker)
@@ -658,12 +646,19 @@ def start_cleanup_thread():
 # Start cleanup on app startup
 start_cleanup_thread()
 
+# Get port from environment variable for Render deployment
+port = int(os.environ.get('PORT', 5000))
+
 if __name__ == "__main__":
     # Use a production WSGI server for better performance
     try:
         from waitress import serve
-        logger.info("Starting server with Waitress")
-        serve(app, host="0.0.0.0", port=5000, threads=8)
+        logger.info(f"Starting server with Waitress on port {port}")
+        serve(app, host="0.0.0.0", port=port, threads=8)
     except ImportError:
-        logger.info("Waitress not available, using Flask development server")
-        app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
+        logger.info(f"Waitress not available, using Flask development server on port {port}")
+        app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+else:
+    # For Render and other WSGI servers, this is the app they should import
+    # Make sure gunicorn is included in requirements.txt
+    logger.info("Application imported by WSGI server")
