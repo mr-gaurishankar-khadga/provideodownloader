@@ -2,16 +2,28 @@ import os
 import uuid
 import logging
 import subprocess
-from flask import Flask, request, send_file, jsonify
+from flask import Flask, request, send_file, jsonify, abort
 from flask_cors import CORS
 import yt_dlp
 
-app = Flask(__name__)
-CORS(app)
+# Ensure /tmp directory exists and is writable
+os.makedirs('/tmp', exist_ok=True)
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, 
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+app = Flask(__name__)
+CORS(app, resources={
+    r"/*": {
+        "origins": "*",
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization"]
+    }
+})
+
+# Configure logging to work in cloud environments
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]  # Ensures logs appear in cloud console
+)
 logger = logging.getLogger(__name__)
 
 def sanitize_filename(filename):
@@ -35,7 +47,7 @@ def convert_to_audio(input_file, output_file):
 
     for strategy in conversion_strategies:
         try:
-            subprocess.run(strategy, shell=True, check=True)
+            subprocess.run(strategy, shell=True, check=True, capture_output=True)
             
             # Verify audio file
             if os.path.exists(output_file) and os.path.getsize(output_file) > 0:
@@ -50,10 +62,8 @@ def download_video(url, format_code=None, download_type='video'):
     Enhanced video download with comprehensive error handling
     """
     try:
-        os.makedirs('/tmp', exist_ok=True)
-
         ydl_opts = {
-            'format': 'bestvideo+bestaudio/best',
+            'format': format_code or 'bestvideo+bestaudio/best',
             'nooverwrites': True,
             'no_warnings': True,
             'ignoreerrors': False,
@@ -61,22 +71,16 @@ def download_video(url, format_code=None, download_type='video'):
             'noplaylist': True,
             'restrictfilenames': True,
             'max_filesize': 2 * 1024 * 1024 * 1024,  # 2GB max
+            'outtmpl': '/tmp/%(title)s_%(id)s.%(ext)s'
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             # First, extract info to get available formats
             info_dict = ydl.extract_info(url, download=False)
             
-            # If a specific format is requested, verify it exists
-            if format_code:
-                available_formats = [f['format_id'] for f in info_dict.get('formats', [])]
-                if format_code not in available_formats:
-                    # Fall back to best available format
-                    format_code = None
-
-            # Update format if not specified
-            if not format_code:
-                ydl_opts['format'] = 'bestvideo+bestaudio/best'
+            # Validate URL
+            if not info_dict:
+                raise ValueError("Unable to extract video information")
 
             # Perform download
             info_dict = ydl.extract_info(url, download=True)
@@ -92,8 +96,14 @@ def download_video(url, format_code=None, download_type='video'):
                     converted_audio = convert_to_audio(filename, audio_filename)
                 except Exception as audio_error:
                     logger.error(f"Audio conversion failed: {audio_error}")
+                    
                     # Attempt direct audio extraction if conversion fails
-                    subprocess.run(f'ffmpeg -i "{filename}" -vn -acodec libmp3lame "{audio_filename}"', shell=True, check=True)
+                    try:
+                        subprocess.run(f'ffmpeg -i "{filename}" -vn -acodec libmp3lame "{audio_filename}"', 
+                                       shell=True, check=True, capture_output=True)
+                    except Exception as e:
+                        logger.error(f"Direct audio extraction failed: {e}")
+                        raise
                 
                 # Clean up original file
                 if os.path.exists(filename):
@@ -119,6 +129,10 @@ def get_video_info(url):
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=False)
+            
+            # Validate URL
+            if not info_dict:
+                raise ValueError("Unable to extract video information")
             
             formats = info_dict.get('formats', [])
             options = []
@@ -149,30 +163,45 @@ def get_video_info(url):
         logger.error(f"Video info error: {e}")
         return []
 
+@app.route('/', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        "status": "ok", 
+        "message": "ProVideoDownloader is running"
+    }), 200
+
 @app.route('/analyze-video', methods=['POST'])
 def analyze_video():
-    url = request.json.get('url')
-    
-    if not url:
-        return jsonify({'error': 'No URL provided'}), 400
-    
+    """Analyze video endpoint"""
     try:
+        url = request.json.get('url')
+        
+        if not url:
+            return jsonify({'error': 'No URL provided'}), 400
+        
         options = get_video_info(url)
+        
+        if not options:
+            return jsonify({'error': 'Unable to extract video information'}), 404
+
         return jsonify({'options': options})
+    
     except Exception as e:
         logger.error(f"Analysis error: {e}")
         return jsonify({'error': 'Failed to analyze video'}), 500
 
 @app.route('/download', methods=['POST'])
 def download():
-    url = request.json.get('url')
-    format_type = request.json.get('format')
-    download_type = request.json.get('type', 'video')
-
-    if not url:
-        return jsonify({'error': 'No URL provided'}), 400
-
+    """Download video/audio endpoint"""
     try:
+        url = request.json.get('url')
+        format_type = request.json.get('format')
+        download_type = request.json.get('type', 'video')
+
+        if not url:
+            return jsonify({'error': 'No URL provided'}), 400
+
         filename = download_video(url, format_type, download_type)
         
         if not filename or not os.path.exists(filename):
@@ -184,5 +213,16 @@ def download():
         logger.error(f"Download failed: {e}")
         return jsonify({'error': str(e)}), 500
 
+# Global error handler
+@app.errorhandler(Exception)
+def handle_global_error(e):
+    """Global error handler for unhandled exceptions"""
+    logger.error(f"Unhandled exception: {e}")
+    return jsonify({"error": "Internal Server Error"}), 500
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(
+        host='0.0.0.0', 
+        port=int(os.environ.get('PORT', 5000)), 
+        debug=False
+    )
