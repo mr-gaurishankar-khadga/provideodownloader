@@ -18,13 +18,17 @@ CORS(app, resources={
     }
 })
 
-# Configure logging to work in cloud environments
+# Add near the app configuration
+app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024 * 1024  # 2GB max payload
+
+# Modify logging to be more production-friendly
 logging.basicConfig(
-    level=logging.INFO, 
+    level=logging.ERROR,  # Change to ERROR for production
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('/tmp/app.log', mode='a')  # Add file logging for render
+        logging.FileHandler('/tmp/app.log', mode='a')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -126,7 +130,7 @@ def get_video_info(url):
     """
     try:
         ydl_opts = {
-            'quiet': False,  # Changed from quiet to True for better error logging
+            'quiet': False,
             'no_warnings': False,
         }
 
