@@ -22,7 +22,10 @@ CORS(app, resources={
 logging.basicConfig(
     level=logging.INFO, 
     format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]  # Ensures logs appear in cloud console
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('/tmp/app.log', mode='a')  # Add file logging for render
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -123,8 +126,8 @@ def get_video_info(url):
     """
     try:
         ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
+            'quiet': False,  # Changed from quiet to True for better error logging
+            'no_warnings': False,
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -160,7 +163,7 @@ def get_video_info(url):
             return options
 
     except Exception as e:
-        logger.error(f"Video info error: {e}")
+        logger.error(f"Video info error: {str(e)}")
         return []
 
 @app.route('/', methods=['GET'])
@@ -188,7 +191,7 @@ def analyze_video():
         return jsonify({'options': options})
     
     except Exception as e:
-        logger.error(f"Analysis error: {e}")
+        logger.error(f"Analysis error: {str(e)}")
         return jsonify({'error': 'Failed to analyze video'}), 500
 
 @app.route('/download', methods=['POST'])
@@ -210,15 +213,30 @@ def download():
         return send_file(filename, as_attachment=True)
     
     except Exception as e:
-        logger.error(f"Download failed: {e}")
+        logger.error(f"Download failed: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 # Global error handler
 @app.errorhandler(Exception)
 def handle_global_error(e):
     """Global error handler for unhandled exceptions"""
-    logger.error(f"Unhandled exception: {e}")
+    logger.error(f"Unhandled exception: {str(e)}")
     return jsonify({"error": "Internal Server Error"}), 500
+
+# Cleanup temporary files before shutdown
+def cleanup_temp_files():
+    """Clean up temporary files in /tmp directory"""
+    for filename in os.listdir('/tmp'):
+        filepath = os.path.join('/tmp', filename)
+        try:
+            if os.path.isfile(filepath) and filepath.startswith('/tmp'):
+                os.unlink(filepath)
+        except Exception as e:
+            logger.error(f"Error removing {filepath}: {e}")
+
+# Register cleanup function
+import atexit
+atexit.register(cleanup_temp_files)
 
 if __name__ == '__main__':
     app.run(
