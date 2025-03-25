@@ -238,6 +238,64 @@ def cleanup_temp_files():
         except Exception as e:
             logger.error(f"Error removing {filepath}: {e}")
 
+
+
+
+def get_video_info(url):
+    """
+    Comprehensive video information extraction with robust error handling
+    """
+    try:
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'ignoreerrors': True,
+            'no_color': True
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            try:
+                info_dict = ydl.extract_info(url, download=False)
+            except Exception as e:
+                logger.error(f"Video extraction failed: {str(e)}")
+                return []
+
+            # Validate URL and video availability
+            if not info_dict or 'formats' not in info_dict:
+                logger.error(f"Unable to extract video information for URL: {url}")
+                return []
+            
+            formats = info_dict.get('formats', [])
+            options = []
+            unique_resolutions = set()
+
+            for f in formats:
+                height = f.get('height', 0)
+                ext = f.get('ext')
+                
+                if height and ext and height not in unique_resolutions and height >= 360:
+                    filesize = f.get('filesize_approx') or f.get('filesize') or 'Unknown'
+                    if filesize != 'Unknown':
+                        filesize = f"{filesize / (1024*1024):.2f} MB"
+
+                    options.append({
+                        'resolution': f'{height}p',
+                        'format': ext,
+                        'filesize': filesize,
+                        'format_id': f.get('format_id')
+                    })
+                    unique_resolutions.add(height)
+
+            # Sort options by resolution
+            options.sort(key=lambda x: int(x['resolution'][:-1]), reverse=True)
+            
+            return options
+
+    except Exception as e:
+        logger.error(f"Unexpected error in video info: {str(e)}")
+        return []
+
+
 # Register cleanup function
 import atexit
 atexit.register(cleanup_temp_files)

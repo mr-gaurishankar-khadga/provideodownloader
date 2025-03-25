@@ -20,7 +20,7 @@ function App() {
     setDownloadProgress(0);
 
     try {
-      const response = await axios.post('https://provideodownloader-2-8bp1.onrender.com/analyze-video', { url: videoUrl }, {
+      const response = await axios.post('https://provideodownloader-3-id1d.onrender.com/analyze-video', { url: videoUrl }, {
         timeout: 15000
       });
       
@@ -49,7 +49,7 @@ function App() {
 
     try {
       const response = await axios.post(
-        'https://provideodownloader-2-8bp1.onrender.com/download', 
+        'https://provideodownloader-3-id1d.onrender.com/download', 
         { url: videoUrl, format: formatId, type: type },
         { 
           responseType: 'blob',
